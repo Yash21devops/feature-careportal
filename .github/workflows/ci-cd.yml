@@ -57,7 +57,8 @@ jobs:
       # ====== DOCKER BUILD & PUSH (Dockerfile is at repo root and named 'dockerfile') ======
       - name: Build Docker image
         run: |
-          docker build -f dockerfile -t "${{ steps.set-image-uri.outputs.image_uri }}" .
+           docker build -t "${{ steps.set-image-uri.outputs.image_uri }}" .
+
 
       - name: Push Docker image
         run: |
