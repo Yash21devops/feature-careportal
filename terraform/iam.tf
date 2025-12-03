@@ -1,5 +1,9 @@
-resource "aws_iam_role" "github_actions_ecr_role" {
-  name = "${var.project_name}-github-ecr-role"
+########################################
+# ECS Task Execution & Task Role
+########################################
+
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "${var.project_name}-ecs-task-execution-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
@@ -7,89 +11,56 @@ resource "aws_iam_role" "github_actions_ecr_role" {
       {
         Effect = "Allow",
         Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
+          Service = "ecs-tasks.amazonaws.com"
         },
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Condition = {
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:Yash21devops/feature-careportal:ref:refs/heads/*"
-          }
-        }
+        Action = "sts:AssumeRole"
       }
     ]
   })
 }
 
-resource "aws_iam_policy" "ecr_push_policy" {
-  name        = "${var.project_name}-ecr-push-policy"
-  description = "Policy for GitHub Actions CI to push Docker images to ECR"
+# Attach AWS managed policy for pulling images + logs
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
 
-  policy = jsonencode({
+# (Optional but nice) Task role if app needs AWS APIs (e.g. Secrets Manager)
+resource "aws_iam_role" "ecs_task_role" {
+  name = "${var.project_name}-ecs-task-role"
+
+  assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect : "Allow",
-        Action : [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:PutImage"
-        ],
-        Resource : "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "github_ecr_role_attachment" {
-  role       = aws_iam_role.github_actions_ecr_role.name
-  policy_arn = aws_iam_policy.ecr_push_policy.arn
-}
-
-resource "aws_iam_role" "github_actions_eks_deploy_role" {
-  name = "${var.project_name}-github-eks-deploy-role"
-
-  assume_role_policy = jsonencode({
-    Version : "2012-10-17",
-    Statement : [
-      {
-        Effect : "Allow",
-        Principal : {
-          Federated : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
+        Effect = "Allow",
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
         },
-        Action : "sts:AssumeRoleWithWebIdentity",
-        Condition : {
-          StringLike : {
-            "token.actions.githubusercontent.com:sub" = "repo:Yash21devops/feature-careportal:ref:refs/heads/*"
-          }
-        }
+        Action = "sts:AssumeRole"
       }
     ]
   })
 }
 
-resource "aws_iam_policy" "eks_deploy_policy" {
-  name        = "${var.project_name}-eks-deploy-policy"
-  description = "Policy to allow GitHub CD to deploy to EKS"
-
-  policy = jsonencode({
-    Version : "2012-10-17",
-    Statement : [
-      {
-        Effect : "Allow",
-        Action : [
-          "eks:DescribeCluster",
-          "eks:ListClusters"
-        ],
-        Resource : "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "github_eks_role_attachment" {
-  role       = aws_iam_role.github_actions_eks_deploy_role.name
-  policy_arn = aws_iam_policy.eks_deploy_policy.arn
-}
+# Example of least-privilege to read ONE secret from Secrets Manager
+# (create aws_secretsmanager_secret in another file if you want to use this)
+# resource "aws_iam_policy" "ecs_read_secret" {
+#   name = "${var.project_name}-ecs-read-secret"
+#
+#   policy = jsonencode({
+#     Version = "2012-10-17",
+#     Statement = [
+#       {
+#         Effect = "Allow",
+#         Action = ["secretsmanager:GetSecretValue"],
+#         Resource = aws_secretsmanager_secret.careportal_api.arn
+#       }
+#     ]
+#   })
+# }
+#
+# resource "aws_iam_role_policy_attachment" "ecs_task_role_secret_policy" {
+#   role       = aws_iam_role.ecs_task_role.name
+#   policy_arn = aws_iam_policy.ecs_read_secret.arn
+# }

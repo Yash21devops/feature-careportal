@@ -1,16 +1,17 @@
-name: CI-CD CarePortal API
+name: CI-CD CarePortal ECS
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["main"]
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
+  ECS_CLUSTER_NAME: ${{ secrets.ECS_CLUSTER_NAME }}
+  ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}
 
 jobs:
   build_and_push:
@@ -18,13 +19,13 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image-tag: ${{ steps.set-image-tag.outputs.image-tag }}
+      image_uri: ${{ steps.set-image-uri.outputs.image_uri }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ====== BUILD + TEST (Java/Maven - adjust if Python/Node) ======
+      # ====== BUILD + TEST (adjust if using Python/Node) ======
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -34,7 +35,7 @@ jobs:
       - name: Maven test
         run: mvn test
 
-      # ====== LOGIN TO AWS + ECR ======
+      # ====== AWS CREDENTIALS ======
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -46,28 +47,27 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set image tag
-        id: set-image-tag
-        run: echo "image-tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+      - name: Set image URI
+        id: set-image-uri
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${GITHUB_SHA}
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
         run: |
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ steps.set-image-tag.outputs.image-tag }}
-          echo "Building $IMAGE_URI"
-          docker build -t "$IMAGE_URI" .
+          docker build -t "${{ steps.set-image-uri.outputs.image_uri }}" .
 
       - name: Push Docker image
         run: |
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ steps.set-image-tag.outputs.image-tag }}
-          docker push "$IMAGE_URI"
+          docker push "${{ steps.set-image-uri.outputs.image_uri }}"
 
   deploy:
-    name: Deploy to EKS via Helm (rolling update)
+    name: Deploy to ECS Fargate
     runs-on: ubuntu-latest
     needs: build_and_push
 
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
@@ -77,38 +77,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: "latest"
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: "latest"
-
-      - name: Update kubeconfig for EKS
+      - name: Render new task definition JSON
+        id: task-def
         run: |
-          aws eks update-kubeconfig \
-            --name ${{ env.EKS_CLUSTER_NAME }} \
-            --region ${{ env.AWS_REGION }}
+          IMAGE_URI=${{ needs.build_and_push.outputs.image_uri }}
+          sed "s|__IMAGE_URI__|$IMAGE_URI|g" infra/ecs-task-def.json > infra/task-def-rendered.json
 
-      - name: Helm upgrade (rolling deployment)
+      - name: Register new task definition
+        id: register-task-def
         run: |
-          IMAGE_TAG=${{ needs.build_and_push.outputs.image-tag }}
-          IMAGE_REPO=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}
-        shell: bash
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://infra/task-def-rendered.json \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
-      - name: Login to Amazon ECR (deploy)
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Helm upgrade release
+      - name: Update ECS service (rolling deployment)
         run: |
-          IMAGE_TAG=${{ needs.build_and_push.outputs.image-tag }}
-          IMAGE_REPO=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}
-
-          helm upgrade --install careportal-api ./helm/careportal-api \
-            --namespace default \
-            --set image.repository="$IMAGE_REPO" \
-            --set image.tag="$IMAGE_TAG"
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER_NAME }} \
+            --service ${{ env.ECS_SERVICE_NAME }} \
+            --task-definition ${{ steps.register-task-def.outputs.task_def_arn }} \
+            --force-new-deployment
