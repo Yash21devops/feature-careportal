@@ -1,0 +1,114 @@
+name: CI-CD CarePortal API
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPO_NAME: ${{ secrets.ECR_REPOSITORY }}
+
+jobs:
+  build_and_push:
+    name: Build, test, and push image to ECR
+    runs-on: ubuntu-latest
+
+    outputs:
+      image-tag: ${{ steps.set-image-tag.outputs.image-tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ====== BUILD + TEST (Java/Maven - adjust if Python/Node) ======
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Maven test
+        run: mvn test
+
+      # ====== LOGIN TO AWS + ECR ======
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: set-image-tag
+        run: echo "image-tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ steps.set-image-tag.outputs.image-tag }}
+          echo "Building $IMAGE_URI"
+          docker build -t "$IMAGE_URI" .
+
+      - name: Push Docker image
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ steps.set-image-tag.outputs.image-tag }}
+          docker push "$IMAGE_URI"
+
+  deploy:
+    name: Deploy to EKS via Helm (rolling update)
+    runs-on: ubuntu-latest
+    needs: build_and_push
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "latest"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "latest"
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Helm upgrade (rolling deployment)
+        run: |
+          IMAGE_TAG=${{ needs.build_and_push.outputs.image-tag }}
+          IMAGE_REPO=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}
+        shell: bash
+
+      - name: Login to Amazon ECR (deploy)
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Helm upgrade release
+        run: |
+          IMAGE_TAG=${{ needs.build_and_push.outputs.image-tag }}
+          IMAGE_REPO=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}
+
+          helm upgrade --install careportal-api ./helm/careportal-api \
+            --namespace default \
+            --set image.repository="$IMAGE_REPO" \
+            --set image.tag="$IMAGE_TAG"

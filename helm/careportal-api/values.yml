@@ -1,0 +1,53 @@
+replicaCount: 2
+
+image:
+  repository: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/feature-careportal-api
+  tag: "latest"          # will be overridden by CI/CD with commit SHA
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 8080
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+podAnnotations: {}
+
+# For future: you can map secret keys from Kubernetes Secret created from AWS Secrets Manager
+env:
+  - name: APP_ENV
+    value: "prod"
+  # example of env from k8s secret (synced from AWS Secrets Manager)
+  # - name: DB_PASSWORD
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: careportal-secrets
+  #       key: db_password
+
+livenessProbe:
+  path: /health
+  port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+readinessProbe:
+  path: /health
+  port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
