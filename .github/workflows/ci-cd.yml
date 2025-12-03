@@ -5,6 +5,7 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -25,7 +26,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ====== BUILD + TEST (adjust if using Python/Node) ======
+      # ====== BUILD + TEST (Maven project in careportal-service/) ======
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -33,7 +34,7 @@ jobs:
           java-version: "17"
 
       - name: Maven test
-        run: mvn test
+        run: mvn -B -f careportal-service/pom.xml test
 
       # ====== AWS CREDENTIALS ======
       - name: Configure AWS credentials
@@ -53,9 +54,10 @@ jobs:
           IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${GITHUB_SHA}
           echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
+      # ====== DOCKER BUILD & PUSH (Dockerfile is at repo root and named 'dockerfile') ======
       - name: Build Docker image
         run: |
-          docker build -t "${{ steps.set-image-uri.outputs.image_uri }}" .
+          docker build -f dockerfile -t "${{ steps.set-image-uri.outputs.image_uri }}" .
 
       - name: Push Docker image
         run: |
@@ -81,13 +83,13 @@ jobs:
         id: task-def
         run: |
           IMAGE_URI=${{ needs.build_and_push.outputs.image_uri }}
-          sed "s|__IMAGE_URI__|$IMAGE_URI|g" infra/ecs-task-def.json > infra/task-def-rendered.json
+          sed "s|__IMAGE_URI__|$IMAGE_URI|g" terraform/ecs-task-def.json > terraform/task-def-rendered.json
 
       - name: Register new task definition
         id: register-task-def
         run: |
           TASK_DEF_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://infra/task-def-rendered.json \
+            --cli-input-json file://terraform/task-def-rendered.json \
             --query "taskDefinition.taskDefinitionArn" \
             --output text)
           echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
