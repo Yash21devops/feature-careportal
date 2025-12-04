@@ -48,22 +48,27 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set image URI
+      - name: Set image URIs
         id: set-image-uri
         run: |
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${GITHUB_SHA}
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          REPO=${{ env.ECR_REPO_NAME }}
+          SHA_TAG=${GITHUB_SHA}
+          echo "image_uri=$REGISTRY/$REPO:$SHA_TAG" >> $GITHUB_OUTPUT
+          echo "image_uri_latest=$REGISTRY/$REPO:latest" >> $GITHUB_OUTPUT
 
-      # ====== DOCKER BUILD & PUSH (Dockerfile is at repo root and named 'dockerfile') ======
       - name: Build Docker image
         run: |
-           docker build -t "${{ steps.set-image-uri.outputs.image_uri }}" .
+          docker build -t "${{ steps.set-image-uri.outputs.image_uri }}" .
 
+      - name: Tag image as latest
+        run: |
+          docker tag "${{ steps.set-image-uri.outputs.image_uri }}" "${{ steps.set-image-uri.outputs.image_uri_latest }}"
 
-      - name: Push Docker image
+      - name: Push Docker images
         run: |
           docker push "${{ steps.set-image-uri.outputs.image_uri }}"
-
+          docker push "${{ steps.set-image-uri.outputs.image_uri_latest }}"
   deploy:
     name: Deploy to ECS Fargate
     runs-on: ubuntu-latest
