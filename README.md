@@ -1,2 +1,2 @@
 # feature-careportal
-AWS DevOps assignment
+CarePortal DevOps Assignment – README
