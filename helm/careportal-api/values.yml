@@ -32,13 +32,13 @@ env:
   #       key: db_password
 
 livenessProbe:
-  path: /health
+  path: /actuator/health
   port: 8080
   initialDelaySeconds: 15
   periodSeconds: 20
 
 readinessProbe:
-  path: /health
+  path: /actuator/health
   port: 8080
   initialDelaySeconds: 5
   periodSeconds: 10
