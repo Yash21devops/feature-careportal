@@ -75,35 +75,19 @@ jobs:
     needs: build_and_push
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Render new task definition JSON
-        id: task-def
-        run: |
-          IMAGE_URI=${{ needs.build_and_push.outputs.image_uri }}
-          sed "s|__IMAGE_URI__|$IMAGE_URI|g" terraform/ecs-task-def.json > terraform/task-def-rendered.json
-
-      - name: Register new task definition
-        id: register-task-def
-        run: |
-          TASK_DEF_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://terraform/task-def-rendered.json \
-            --query "taskDefinition.taskDefinitionArn" \
-            --output text)
-          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
-
-      - name: Update ECS service (rolling deployment)
-        run: |
-          aws ecs update-service \
-            --cluster ${{ env.ECS_CLUSTER_NAME }} \
-            --service ${{ env.ECS_SERVICE_NAME }} \
-            --task-definition ${{ steps.register-task-def.outputs.task_def_arn }} \
-            --force-new-deployment
+    - name: Force new deployment on ECS service
+      run: |
+        aws ecs update-service \
+          --cluster ${{ env.ECS_CLUSTER_NAME }} \
+          --service ${{ env.ECS_SERVICE_NAME }} \
+          --force-new-deployment
