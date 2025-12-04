@@ -102,7 +102,7 @@ resource "aws_lb_target_group" "api" {
   target_type = "ip"
 
   health_check {
-    path                = "/health"
+    path                = "/actuator/health"
     protocol            = "HTTP"
     matcher             = "200-399"
     interval            = 30
